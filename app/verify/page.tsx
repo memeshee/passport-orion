@@ -13,10 +13,18 @@ export default function VerifyPage() {
   const [error, setError] = useState("");
 
   async function verify() {
-    if (!uid.trim()) { setError("Paste a passport or action UID."); return; }
+    const raw = uid.trim();
+    if (!raw) { setError("Paste a passport or action UID (starts with 0x, 66 chars)."); return; }
+    // Normalize: EAS UIDs are 0x + 64 hex. Reject obviously-wrong inputs early
+    // with a helpful message instead of a generic "No attestation found".
+    const normalized = raw.startsWith("0x") ? raw : "0x" + raw;
+    if (!/^0x[0-9a-fA-F]{64}$/.test(normalized)) {
+      setError("That doesn't look like an attestation UID. A UID is 0x followed by 64 hex chars (e.g. 0xab12…). The agent name (kiter-trader-01) or a random hash won't work — copy the UID shown right after you mint a passport.");
+      return;
+    }
     setBusy(true); setError(""); setResult(null);
     try {
-      const res = await verifyAttestation(uid.trim(), network);
+      const res = await verifyAttestation(normalized, network);
       setResult(res);
     } catch (e: any) {
       setError("Verify failed: " + (e?.message ?? e));

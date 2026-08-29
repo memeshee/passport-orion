@@ -14,6 +14,7 @@ export default function RegisterPage() {
   const [network, setNetwork] = useState<NetworkKey>("84532");
   const [status, setStatus] = useState<string>("");
   const [uid, setUid] = useState<string>("");
+  const [txHash, setTxHash] = useState<string>("");
   const [busy, setBusy] = useState(false);
 
   async function connect() {
@@ -65,6 +66,7 @@ export default function RegisterPage() {
   }
 
   async function mint() {
+    if (busy || !account) return; // guard against double-submit
     try {
       setBusy(true);
       setStatus("Requesting network switch to Base " + (network === "8453" ? "mainnet" : "Sepolia") + "…");
@@ -83,9 +85,10 @@ export default function RegisterPage() {
         mandateJson: parsedMandate,
         ext: "",
       };
-      setStatus("Submitting passport attestation on-chain…");
+      setStatus("Submitting passport attestation on-chain… (one transaction)");
       const res = await createPassport(signer, network, input);
       setUid(res.uid);
+      setTxHash(res.txHash);
       setStatus("PASSPORT minted! DID = " + res.did);
     } catch (e: any) {
       setStatus("Error: " + (e?.shortMessage ?? e?.message ?? e));
@@ -133,10 +136,34 @@ export default function RegisterPage() {
       {uid && (
         <div className="card p-4 text-sm">
           <p className="text-[#7CFC9B] mb-1">✓ Passport UID (your receipt):</p>
-          <p className="mono text-[#bcd]">{uid}</p>
+          <p className="mono text-[#bcd] break-all select-all">{uid}</p>
+          <button
+            className="btn mt-2 text-xs"
+            onClick={() => navigator.clipboard?.writeText(uid)}
+          >
+            Copy UID
+          </button>
+          {txHash && (
+            <p className="mt-2 text-[#9a9aab]">
+              Tx:{" "}
+              <a
+                className="text-base underline break-all"
+                href={
+                  network === "8453"
+                    ? `https://basescan.org/tx/${txHash}`
+                    : `https://sepolia.basescan.org/tx/${txHash}`
+                }
+                target="_blank"
+                rel="noreferrer"
+              >
+                {txHash}
+              </a>
+            </p>
+          )}
           <p className="mt-2 text-[#9a9aab]">
-            Copy this and paste it on the <a href="/verify" className="text-base underline">Verify</a>{" "}
-            page — anyone can prove it independently via EAS.
+            This is a 32-byte attestation UID (starts with 0x…). Paste it on the{" "}
+            <a href="/verify" className="text-base underline">Verify</a> page along with the
+            same network to prove it — anyone can verify it independently via EAS.
           </p>
         </div>
       )}

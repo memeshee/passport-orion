@@ -17,14 +17,25 @@ export const PASSPORT_SCHEMA =
 export const ACTION_SCHEMA =
   "bytes32 passportUid,string action,string target,string payloadHash,uint64 timestamp,string ext";
 
-export const SCHEMA_UIDS: Record<string, { passport: string; action: string }> = {
-  // Base Sepolia testnet (demo) — filled at runtime if not pre-registered.
-  "84532": { passport: "", action: "" },
-  // Base mainnet — filled at runtime if not pre-registered.
-  "8453": { passport: "", action: "" },
-};
-
 export type NetworkKey = "84532" | "8453";
+
+/**
+ * Deterministic schema UIDs (EAS computes them as keccak256 of the schema
+ * string + resolver + revocable flag). Computing them OFFLINE means minting an
+ * agent passport is exactly ONE on-chain attestation — no redundant schema
+ * register transactions. We register the schema on-chain only if it isn't
+ * already present (it already is on Base/Sepolia, deployed by EAS).
+ */
+export const SCHEMA_UIDS: Record<NetworkKey, { passport: string; action: string }> = {
+  "84532": {
+    passport: SchemaRegistry.getSchemaUID(PASSPORT_SCHEMA, ethers.ZeroAddress, true),
+    action: SchemaRegistry.getSchemaUID(ACTION_SCHEMA, ethers.ZeroAddress, true),
+  },
+  "8453": {
+    passport: SchemaRegistry.getSchemaUID(PASSPORT_SCHEMA, ethers.ZeroAddress, true),
+    action: SchemaRegistry.getSchemaUID(ACTION_SCHEMA, ethers.ZeroAddress, true),
+  },
+};
 
 export function getEAS(network: NetworkKey, signer: ethers.Signer) {
   // Official EAS deployment on Base (same address on Base mainnet + Base Sepolia).

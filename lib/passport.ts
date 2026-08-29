@@ -5,6 +5,7 @@ import {
   getSchemaRegistry,
   encodePassport,
   encodeAction,
+  SCHEMA_UIDS,
   PASSPORT_SCHEMA,
   ACTION_SCHEMA,
   EAS_GRAPHQL,
@@ -36,8 +37,9 @@ export type PassportResult = {
 };
 
 /**
- * Register a passport schema on the network if not already present, then
- * attest the agent's identity. Returns the attestation UID (the on-chain receipt).
+ * Mint a passport: ensure the PASSPORT schema is registered (idempotent — only
+ * sends a register tx the first time, on later runs it's already on-chain), then
+ * send a single attestation referencing it. Returns the attestation UID + tx hash.
  */
 export async function createPassport(
   signer: ethers.Signer,
@@ -46,30 +48,35 @@ export async function createPassport(
 ): Promise<PassportResult> {
   const eas: EAS = getEAS(network, signer);
   const registry = getSchemaRegistry(network, signer);
-  const owner = input.owner;
-  const creator = await signer.getAddress();
+  const recipient = input.owner;
 
-  // 1. Register schemas (EAS returns a Transaction; .wait() yields the schema UID).
-  //    EAS is idempotent per (schema, creator): re-registering returns the same UID.
-  const passportSchemaTx = await registry.register({
-    schema: PASSPORT_SCHEMA,
-    resolverAddress: ethers.ZeroAddress,
-    revocable: true,
-  });
-  const passportSchemaUid = await passportSchemaTx.wait();
+  // 1. Register schema only if it isn't already on-chain (avoids duplicate register txns).
+  let passportSchemaUid = SCHEMA_UIDS[network].passport;
+  try {
+    const existing = await registry.getSchema({ uid: passportSchemaUid });
+    if (!existing) {
+      const regTx = await registry.register({
+        schema: PASSPORT_SCHEMA,
+        resolverAddress: ethers.ZeroAddress,
+        revocable: true,
+      });
+      passportSchemaUid = await regTx.wait();
+    }
+  } catch {
+    // getSchema throws if absent — register it.
+    const regTx = await registry.register({
+      schema: PASSPORT_SCHEMA,
+      resolverAddress: ethers.ZeroAddress,
+      revocable: true,
+    });
+    passportSchemaUid = await regTx.wait();
+  }
 
-  const actionSchemaTx = await registry.register({
-    schema: ACTION_SCHEMA,
-    resolverAddress: ethers.ZeroAddress,
-    revocable: true,
-  });
-  const actionSchemaUid = await actionSchemaTx.wait();
-
-  const did = deriveDid(owner);
+  const did = deriveDid(recipient);
   const data = encodePassport({
     agentName: input.agentName,
     did,
-    owner,
+    owner: recipient,
     agentType: input.agentType,
     mandateJson: input.mandateJson,
     ext: input.ext ?? "",
@@ -78,15 +85,14 @@ export async function createPassport(
   const tx = await eas.attest({
     schema: passportSchemaUid,
     data: {
-      recipient: owner,
+      recipient,
       expirationTime: 0n,
       revocable: true,
       data,
     },
   });
   const uid = await tx.wait();
-
-  return { uid, did, txHash: "" };
+  return { uid, did, txHash: (tx.data as any).hash ?? "" };
 }
 
 export type ActionInput = {
@@ -107,13 +113,26 @@ export async function attestAction(
   const eas: EAS = getEAS(network, signer);
   const registry = getSchemaRegistry(network, signer);
 
-  // Ensure the action schema is registered (idempotent per creator).
-  const actionSchemaTx = await registry.register({
-    schema: ACTION_SCHEMA,
-    resolverAddress: ethers.ZeroAddress,
-    revocable: true,
-  });
-  const actionSchemaUid = await actionSchemaTx.wait();
+  // Register action schema only if not already on-chain (idempotent).
+  let actionSchemaUid = SCHEMA_UIDS[network].action;
+  try {
+    const existing = await registry.getSchema({ uid: actionSchemaUid });
+    if (!existing) {
+      const regTx = await registry.register({
+        schema: ACTION_SCHEMA,
+        resolverAddress: ethers.ZeroAddress,
+        revocable: true,
+      });
+      actionSchemaUid = await regTx.wait();
+    }
+  } catch {
+    const regTx = await registry.register({
+      schema: ACTION_SCHEMA,
+      resolverAddress: ethers.ZeroAddress,
+      revocable: true,
+    });
+    actionSchemaUid = await regTx.wait();
+  }
 
   const payloadHash = ethers
     .keccak256(ethers.toUtf8Bytes(input.payload))
