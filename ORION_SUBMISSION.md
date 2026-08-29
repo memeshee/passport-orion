@@ -9,12 +9,12 @@ Deadline: **2026-09-02 23:59 UTC**  (countdown: ~9 days from build start)
   who it says it is and what it did — settling on Base via EAS."
 
 ## Hard requirements (Orion)
-- [ ] Registered wallet (Base, free signature) — DONE (user has wallet + fee)
-- [ ] Submission includes website URL — Vercel deploy of this app
-- [ ] X profile — @kiter_agent
-- [ ] GitHub URL — this repo
-- [ ] Discord or Telegram link — in profile
-- [ ] Demo link — live /verify page with a real attestation UID, OR a recorded demo
+- [x] Registered wallet (Base, free signature) — done (user has wallet + fee)
+- [x] Submission includes website URL — https://passport-orion.vercel.app
+- [x] X profile — @kiter_agent
+- [x] GitHub URL — https://github.com/memeshee/passport-orion
+- [x] Discord or Telegram link — in profile
+- [ ] Demo link — live /verify page with a real attestation UID (run `npm run demo` with funded wallet to capture one), OR a recorded demo
 - [ ] Ignition fee (~$10 ETH) paid at submit time
 
 ## Build status

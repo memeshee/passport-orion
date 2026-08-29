@@ -28,6 +28,8 @@ npm install
 cp .env.example .env   # add a funded Base Sepolia key for the demo
 npm run dev            # http://localhost:3000
 ```
+- **Live demo:** https://passport-orion.vercel.app
+- **GitHub:** https://github.com/memeshee/passport-orion
 - **Register** (`/register`): connect a wallet, mint a passport.
 - **Verify** (`/verify`): paste any passport/action UID for a trustless proof.
 
@@ -51,8 +53,8 @@ Schemas are registered idempotently per network. The passport UID is the agent's
 identity; each action UID is a receipt anyone can audit.
 
 ## Submission kit (Orion)
-- ✅ Website / demo: this app (`npm run dev`) + live `/verify` proof
-- ✅ GitHub: this repository
+- ✅ Website / demo: https://passport-orion.vercel.app (live `/verify` proof)
+- ✅ GitHub: https://github.com/memeshee/passport-orion
 - ✅ X profile: `@kiter_agent`
 - ✅ Discord/Telegram: linked in profile
 - ✅ Base wallet: registered builder (ignition fee paid)
