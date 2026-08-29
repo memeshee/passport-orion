@@ -27,11 +27,49 @@ export default function RegisterPage() {
     setStatus("Wallet connected: " + accounts[0].slice(0, 10) + "…");
   }
 
+  async function switchNetwork() {
+    const net = network === "8453" ? 8453 : 84532;
+    const hex = "0x" + net.toString(16);
+    try {
+      await (window as any).ethereum.request({
+        method: "wallet_switchEthereumChain",
+        params: [{ chainId: hex }],
+      });
+    } catch (e: any) {
+      // 4902 = chain not added to wallet yet. Offer to add Base / Base Sepolia.
+      if (e?.code === 4902) {
+        const addParams =
+          net === 8453
+            ? {
+                chainId: hex,
+                chainName: "Base",
+                nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+                rpcUrls: ["https://mainnet.base.org"],
+                blockExplorerUrls: ["https://basescan.org"],
+              }
+            : {
+                chainId: hex,
+                chainName: "Base Sepolia",
+                nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+                rpcUrls: ["https://sepolia.base.org"],
+                blockExplorerUrls: ["https://sepolia.basescan.org"],
+              };
+        await (window as any).ethereum.request({
+          method: "wallet_addEthereumChain",
+          params: [addParams],
+        });
+      } else {
+        throw e;
+      }
+    }
+  }
+
   async function mint() {
     try {
       setBusy(true);
       setStatus("Requesting network switch to Base " + (network === "8453" ? "mainnet" : "Sepolia") + "…");
       const provider = new ethers.BrowserProvider((window as any).ethereum);
+      await switchNetwork();
       const signer = await provider.getSigner();
       const owner = await signer.getAddress();
 

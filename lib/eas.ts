@@ -27,18 +27,14 @@ export const SCHEMA_UIDS: Record<string, { passport: string; action: string }> =
 export type NetworkKey = "84532" | "8453";
 
 export function getEAS(network: NetworkKey, signer: ethers.Signer) {
-  const easAddress =
-    network === "8453"
-      ? "0xC2679fBD37d9519D039a6b09482Ff97dD32340EC" // Base mainnet EAS
-      : "0xC2679fBD37d9519D039a6b09482Ff97dD32340EC"; // Base Sepolia EAS (same deployment address pattern)
+  // Official EAS deployment on Base (same address on Base mainnet + Base Sepolia).
+  const easAddress = "0x4200000000000000000000000000000000000021";
   return new EAS(easAddress).connect(signer);
 }
 
 export function getSchemaRegistry(network: NetworkKey, signer: ethers.Signer) {
-  const registryAddress =
-    network === "8453"
-      ? "0x4200000000000000000000000000000000000005" // SchemaRegistry on Base
-      : "0x4200000000000000000000000000000000000005"; // SchemaRegistry on Base Sepolia
+  // Official SchemaRegistry deployment on Base (mainnet + Sepolia share this address).
+  const registryAddress = "0x4200000000000000000000000000000000000020";
   return new SchemaRegistry(registryAddress).connect(signer);
 }
 
