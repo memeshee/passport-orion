@@ -9,8 +9,10 @@ import { ethers } from "ethers";
 
 // Passport: an agent's verifiable identity + scoped mandate.
 // (agentName, did, owner, agentType, mandateJson, ext)
+// NOTE: `owner` is an EVM address -> use the native `address` type (20 bytes),
+// not `bytes32` (32 bytes), or SchemaEncoder throws "incorrect data length".
 export const PASSPORT_SCHEMA =
-  "string agentName,string did,bytes32 owner,string agentType,string mandateJson,string ext";
+  "string agentName,string did,address owner,string agentType,string mandateJson,string ext";
 
 // Action receipt: proof that a specific agent action happened under a passport.
 // (passportUid, action, target, payloadHash, timestamp, ext)

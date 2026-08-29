@@ -1,39 +1,141 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
 :root {
-  color-scheme: dark;
+  /* PASSPORT — editorial "ledger" design system (keryx.cc inspired, original) */
+  --paper: #f4ecdc;        /* warm cream page */
+  --paper-2: #ece1c9;      /* slightly deeper panel */
+  --ink: #1b1712;          /* near-black ink */
+  --ink-soft: #3a342a;     /* muted ink */
+  --seal: #9f0712;         /* seal red (accents) */
+  --seal-2: #c0381c;       /* lighter seal */
+  --gold: #9a7b2e;         /* aged gold */
+  --moss: #2e7c5e;         /* ledger green (valid) */
+  --line: #d8cbb0;         /* hairline rules */
+  --mono: "Spline Sans Mono", ui-monospace, "SF Mono", Menlo, monospace;
 }
+
+@import url("https://fonts.googleapis.com/css2?family=Bodoni+Moda:opsz,wght@6..96,400;6..96,600;6..96,800&family=Spectral:wght@300;400;500;600&family=Spline+Sans+Mono:wght@400;500&display=swap");
+
+* { box-sizing: border-box; }
+
+html, body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: "Spectral", Georgia, serif;
+  -webkit-font-smoothing: antialiased;
+  margin: 0;
+  padding: 0;
+}
+
 body {
-  background: #0a0a0f;
-  color: #e8e8f0;
+  background-image:
+    radial-gradient(circle at 12% 18%, rgba(159,7,18,0.05), transparent 40%),
+    radial-gradient(circle at 88% 82%, rgba(42,124,94,0.05), transparent 42%);
+  min-height: 100vh;
 }
-.neon {
-  text-shadow: 0 0 12px rgba(0, 82, 255, 0.6);
+
+/* Display serif for headings */
+.serif-display {
+  font-family: "Bodoni Moda", "Times New Roman", serif;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 0.95;
 }
-.card {
-  background: #111118;
-  border: 1px solid #23232f;
-  border-radius: 14px;
+
+.mono { font-family: var(--mono); }
+
+/* Layout shell */
+.shell { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+
+/* Top bar */
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 22px 0; border-bottom: 1px solid var(--line);
 }
+.brand {
+  font-family: "Bodoni Moda", serif; font-weight: 800; font-size: 22px;
+  letter-spacing: 0.04em; text-transform: uppercase;
+}
+.brand .dot { color: var(--seal); }
+.nav a {
+  margin-left: 26px; font-family: var(--mono); font-size: 12px;
+  text-transform: uppercase; letter-spacing: 0.12em; color: var(--ink-soft);
+  text-decoration: none;
+}
+.nav a:hover { color: var(--seal); }
+
+/* Hero */
+.hero { padding: 84px 0 56px; }
+.kicker {
+  font-family: var(--mono); font-size: 12px; letter-spacing: 0.22em;
+  text-transform: uppercase; color: var(--seal); margin-bottom: 22px;
+}
+.hero h1 {
+  font-family: "Bodoni Moda", serif; font-weight: 800;
+  font-size: clamp(44px, 8vw, 104px); line-height: 0.92;
+  margin: 0 0 24px; letter-spacing: -0.02em;
+}
+.hero h1 em { font-style: italic; color: var(--seal); }
+.lede {
+  font-size: clamp(17px, 2.4vw, 22px); line-height: 1.5; max-width: 640px;
+  color: var(--ink-soft); margin-bottom: 36px;
+}
+
+/* Buttons */
 .btn {
-  background: #0052ff;
-  color: white;
-  padding: 10px 18px;
-  border-radius: 10px;
-  font-weight: 600;
-  transition: opacity 0.15s ease;
+  display: inline-flex; align-items: center; gap: 8px;
+  font-family: var(--mono); font-size: 13px; text-transform: uppercase;
+  letter-spacing: 0.1em; padding: 13px 22px; border-radius: 2px;
+  border: 1px solid var(--ink); background: var(--ink); color: var(--paper);
+  cursor: pointer; text-decoration: none; transition: all 0.18s ease;
 }
-.btn:hover { opacity: 0.85; }
-.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn:hover { background: var(--seal); border-color: var(--seal); }
+.btn.ghost { background: transparent; color: var(--ink); }
+.btn.ghost:hover { background: var(--ink); color: var(--paper); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* Cards / panels */
+.card {
+  background: var(--paper-2); border: 1px solid var(--line);
+  border-radius: 4px; padding: 26px;
+}
+.section { padding: 56px 0; border-top: 1px solid var(--line); }
+.section-title {
+  font-family: "Bodoni Moda", serif; font-weight: 600; font-size: clamp(28px, 4vw, 44px);
+  margin: 0 0 8px;
+}
+.section-sub { color: var(--ink-soft); max-width: 580px; margin-bottom: 36px; }
+
+/* Pill step number */
+.step-num {
+  font-family: "Bodoni Moda", serif; font-weight: 800; font-size: 40px;
+  color: var(--seal); line-height: 1;
+}
+.grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+@media (max-width: 760px){ .grid-3 { grid-template-columns: 1fr; } }
+
+/* Ledger table (keryx-style) */
+.ledger { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 13px; }
+.ledger th {
+  text-align: left; text-transform: uppercase; letter-spacing: 0.12em;
+  font-size: 11px; color: var(--ink-soft); padding: 12px 14px; border-bottom: 1px solid var(--ink);
+}
+.ledger td { padding: 13px 14px; border-bottom: 1px solid var(--line); }
+.ledger tr:hover td { background: rgba(159,7,18,0.04); }
+.paid { color: var(--moss); }
+.status-ok { color: var(--moss); font-family: var(--mono); }
+.status-bad { color: var(--seal); }
+
+/* Inputs */
 .input {
-  background: #0c0c12;
-  border: 1px solid #2a2a38;
-  border-radius: 8px;
-  padding: 10px 12px;
-  width: 100%;
-  color: #e8e8f0;
-  font-family: ui-monospace, monospace;
+  width: 100%; background: var(--paper); border: 1px solid var(--ink);
+  border-radius: 2px; padding: 12px 14px; font-family: var(--mono); font-size: 14px;
+  color: var(--ink); outline: none;
 }
-.mono { font-family: ui-monospace, monospace; word-break: break-all; }
+.input:focus { border-color: var(--seal); }
+textarea.input { resize: vertical; }
+label { font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; }
+
+/* Footer */
+.footer { border-top: 1px solid var(--line); padding: 40px 0; color: var(--ink-soft); font-family: var(--mono); font-size: 12px; }
+
+/* Reveal animation helper */
+.reveal { opacity: 0; transform: translateY(18px); }
