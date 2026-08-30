@@ -62,6 +62,7 @@ function VerifyFallback() {
         <nav className="nav">
           <Link href="/register">Register</Link>
           <Link href="/verify">Verify</Link>
+          <Link href="/profile">Profile</Link>
           <Link href="/schemas">Schemas</Link>
         </nav>
       </header>
@@ -141,6 +142,7 @@ function VerifyPageInner() {
         <nav className="nav">
           <Link href="/register">Register</Link>
           <Link href="/verify">Verify</Link>
+          <Link href="/profile">Profile</Link>
           <Link href="/schemas">Schemas</Link>
         </nav>
       </header>

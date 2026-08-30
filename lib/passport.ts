@@ -592,3 +592,139 @@ function decodeData(schema: string, hexData: string): DecodedField[] {
   });
   return fields;
 }
+
+/* ============================================================================
+ *  PROFILE — fetch all EAS attestations where an address is the attester
+ *  or the recipient. Used by /profile to show the agent's full passport
+ *  portfolio (passport UIDs + action receipts in chronological order).
+ *  ========================================================================== */
+
+export type ProfileAttestation = {
+  uid: string;
+  schemaId: string;
+  kind: "passport" | "action" | "other";
+  attester: string;
+  recipient: string;
+  time: number;        // unix seconds
+  revoked: boolean;
+  revocable: boolean;
+  decoded: DecodedField[] | null;
+  network: NetworkKey;
+  explorerUrl: string;
+};
+
+const EAS_EXPLORER: Record<NetworkKey, string> = {
+  "8453": "https://easscan.org",
+  "84532": "https://sepolia.easscan.org",
+};
+
+/** Build the EAS GraphQL `attestations` query (paginated). Returns the
+ *  attestation records and a `hasMore` flag — the caller can page by
+ *  incrementing the `skip` variable. */
+async function queryAttestationsBy(
+  endpoint: string,
+  field: "attester" | "recipient",
+  address: string,
+  skip = 0,
+  first = 100
+): Promise<{ items: any[]; hasMore: boolean }> {
+  const query = `query($first: Int!, $skip: Int!, $where: AttestationWhereInput!) {
+    attestations(
+      first: $first
+      skip: $skip
+      orderBy: time
+      orderDirection: desc
+      where: $where
+    ) {
+      id schemaId attester recipient revoked revocable
+      time expirationTime data
+    }
+  }`;
+  // EAS indexer expects the address as the lowercase 0x-prefixed string.
+  const where: any = {};
+  where[field] = { equals: address.toLowerCase() };
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, variables: { first, skip, where } }),
+  });
+  const json = await res.json();
+  const items: any[] = json?.data?.attestations ?? [];
+  return { items, hasMore: items.length === first };
+}
+
+/** Fetch all EAS attestations for an address across one network, both as
+ *  attester and as recipient. Dedupe by UID (the agent can be both for the
+ *  same passport) and classify each as passport / action / other. */
+export async function fetchProfile(
+  address: string,
+  network: NetworkKey
+): Promise<ProfileAttestation[]> {
+  if (!ethers.isAddress(address)) return [];
+  const endpoint = EAS_GRAPHQL[network];
+  const explorer = EAS_EXPLORER[network];
+  const passportUid = SCHEMA_UIDS[network].passport.toLowerCase();
+  const actionUid = SCHEMA_UIDS[network].action.toLowerCase();
+
+  const [byAttester, byRecipient] = await Promise.all([
+    queryAttestationsBy(endpoint, "attester", address).catch(() => ({ items: [], hasMore: false })),
+    queryAttestationsBy(endpoint, "recipient", address).catch(() => ({ items: [], hasMore: false })),
+  ]);
+
+  const seen = new Set<string>();
+  const out: ProfileAttestation[] = [];
+  for (const att of [...byAttester.items, ...byRecipient.items]) {
+    const uid = att.id;
+    if (!uid || seen.has(uid)) continue;
+    seen.add(uid);
+    const schemaId = (att.schemaId || "").toLowerCase();
+    let kind: ProfileAttestation["kind"] = "other";
+    if (schemaId === passportUid) kind = "passport";
+    else if (schemaId === actionUid) kind = "action";
+    // Try to decode the data field if it's one of our schemas
+    let decoded: DecodedField[] | null = null;
+    try {
+      if (kind === "passport" && typeof att.data === "string" && att.data.startsWith("0x")) {
+        decoded = decodeData(PASSPORT_SCHEMA, att.data);
+      } else if (kind === "action" && typeof att.data === "string" && att.data.startsWith("0x")) {
+        decoded = decodeData(ACTION_SCHEMA, att.data);
+      }
+    } catch { /* best-effort */ }
+    out.push({
+      uid,
+      schemaId,
+      kind,
+      attester: att.attester,
+      recipient: att.recipient,
+      time: Number(att.time ?? 0),
+      revoked: !!att.revoked,
+      revocable: !!att.revocable,
+      decoded,
+      network,
+      explorerUrl: `${explorer}/attestation/view/${uid}`,
+    });
+  }
+  // Sort newest first
+  out.sort((a, b) => b.time - a.time);
+  return out;
+}
+
+/** Fetch the profile across both Base mainnet and Base Sepolia, merge and
+ *  dedupe. This is what /profile calls by default. */
+export async function fetchProfileAllNetworks(
+  address: string
+): Promise<ProfileAttestation[]> {
+  const [a, b] = await Promise.all([
+    fetchProfile(address, "8453").catch(() => []),
+    fetchProfile(address, "84532").catch(() => []),
+  ]);
+  const seen = new Set<string>();
+  const out: ProfileAttestation[] = [];
+  for (const x of [...a, ...b]) {
+    if (seen.has(x.uid)) continue;
+    seen.add(x.uid);
+    out.push(x);
+  }
+  out.sort((a, b) => b.time - a.time);
+  return out;
+}

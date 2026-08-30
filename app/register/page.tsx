@@ -22,6 +22,7 @@ export default function RegisterPage() {
   const [actionTarget, setActionTarget] = useState("PHOENIX/SOL-PERP");
   const [actionPayload, setActionPayload] = useState('{"side":"long","size":1.5,"price":152.3}');
   const [actionUids, setActionUids] = useState<{ uid: string; txHash: string; action: string; target: string }[]>([]);
+  const [ownerAddress, setOwnerAddress] = useState<string>("");
 
   async function connect() {
     if (!(window as any).ethereum) {
@@ -79,6 +80,7 @@ export default function RegisterPage() {
       await switchNetwork();
       const signer = await provider.getSigner();
       const owner = await signer.getAddress();
+      setOwnerAddress(owner);
 
       let parsedMandate = mandate;
       try {
@@ -175,6 +177,7 @@ export default function RegisterPage() {
         <nav className="nav">
           <Link href="/register">Register</Link>
           <Link href="/verify">Verify</Link>
+          <Link href="/profile">Profile</Link>
           <Link href="/schemas">Schemas</Link>
         </nav>
       </header>
@@ -246,6 +249,11 @@ export default function RegisterPage() {
                 <Link className="btn ghost" style={{ fontSize: 12 }} href={`/verify?uid=${uid}&network=${network}`}>
                   Verify ↗
                 </Link>
+                {ownerAddress && (
+                  <Link className="btn ghost" style={{ fontSize: 12 }} href={`/profile?address=${ownerAddress}`}>
+                    View profile ↗
+                  </Link>
+                )}
               </div>
               {txHash && (
                 <p style={{ marginTop: 12, fontSize: 12 }}>
