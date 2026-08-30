@@ -115,6 +115,26 @@ function VerifyPageInner() {
       if (!res.valid) {
         const diag = await diagnoseAttestation(normalized, net);
         setDiagnostic(diag);
+        // If the contract says the attestation IS on-chain, the EAS GraphQL
+        // indexer is just lagging. Auto-poll the indexer for up to ~30
+        // seconds (8 attempts × 4s) and flip to VALID the moment it catches
+        // up. This eliminates the "INVALID + on-chain diagnostic" conflict
+        // without forcing the user to manually refresh.
+        if (diag?.onChain) {
+          for (let i = 0; i < 8; i++) {
+            await new Promise((r) => setTimeout(r, 4000));
+            try {
+              const retry = await verifyAttestation(normalized, net);
+              if (retry.valid) {
+                setResult(retry);
+                setDiagnostic(null);
+                return;
+              }
+            } catch {
+              /* keep polling */
+            }
+          }
+        }
       }
     } catch (e: any) {
       setError("Verify failed: " + (e?.message ?? e));
@@ -226,7 +246,7 @@ function VerifyPageInner() {
                 {diagnostic.onChain ? (
                   <div>
                     <p style={{ color: "var(--moss)", marginBottom: 6 }}>
-                      ✓ The EAS contract <em>does</em> hold this attestation. The indexer just hasn't picked it up yet — try again in a few seconds.
+                      ✓ The EAS contract <em>does</em> hold this attestation. The indexer just hasn't picked it up yet — auto-retrying every 4s for up to 30s…
                     </p>
                     <div className="mono" style={{ fontSize: 11, color: "var(--ink-soft)", lineHeight: 1.6 }}>
                       <div>attester: <span style={{ color: "var(--ink)" }}>{diagnostic.attester}</span></div>

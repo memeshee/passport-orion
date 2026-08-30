@@ -727,6 +727,60 @@ export async function fetchProfile(
   return out;
 }
 
+/** Hydrate a partial attestation (e.g. one returned by
+ *  fetchProfileFromChain which has `decoded: null` and no data field)
+ *  by calling EAS.getAttestation(uid) on-chain and decoding the data
+ *  blob. Mutates the input array in place and returns it for chaining.
+ *  This makes the chain-scan fallback produce the same rich UI as the
+ *  indexer — agents see their actual agentName, did, owner, mandate,
+ *  not "?" placeholders. */
+export async function hydrateFromChain(
+  items: ProfileAttestation[]
+): Promise<ProfileAttestation[]> {
+  // Group by network to avoid recreating providers
+  const byNet: Record<NetworkKey, ProfileAttestation[]> = { "8453": [], "84532": [] };
+  for (const it of items) {
+    if (!it.decoded && it.uid) byNet[it.network].push(it);
+  }
+  for (const net of ["8453", "84532"] as NetworkKey[]) {
+    const list = byNet[net];
+    if (list.length === 0) continue;
+    const provider = RPC_URLS[net];
+    const eas = new ethers.Contract(
+      "0x4200000000000000000000000000000000000021",
+      EAS_ABI_FROM_CHAIN,
+      provider
+    );
+    await Promise.all(
+      list.map(async (it) => {
+        try {
+          const att = await eas.getAttestation(it.uid);
+          if (!att) return;
+          // v1.5 struct indices: 0=uid, 1=schema, 2=time, 6=recipient,
+          // 7=attester, 8=revocable, 9=data
+          it.time = Number(att[2] ?? 0);
+          it.attester = att[7] ?? it.attester;
+          it.recipient = att[6] ?? it.recipient;
+          it.revocable = !!att[8];
+          const dataBlob: string = att[9] ?? "0x";
+          if (dataBlob && dataBlob !== "0x") {
+            if (it.kind === "passport") {
+              it.decoded = decodeData(PASSPORT_SCHEMA, dataBlob);
+            } else if (it.kind === "action") {
+              it.decoded = decodeData(ACTION_SCHEMA, dataBlob);
+            }
+          }
+        } catch {
+          /* best-effort: leave decoded null if getAttestation fails */
+        }
+      })
+    );
+  }
+  // Re-sort because timestamps may have been filled in
+  items.sort((a, b) => b.time - a.time);
+  return items;
+}
+
 /** On-chain fallback: scan the EAS contract for `Attested` events where
  *  the address is the recipient. This is what the indexer would return
  *  once it catches up — but we can pull directly from the chain to bypass

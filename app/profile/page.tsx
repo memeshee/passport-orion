@@ -8,6 +8,7 @@ import { ethers } from "ethers";
 import {
   fetchProfileAllNetworks,
   fetchProfileFromChain,
+  hydrateFromChain,
   ProfileAttestation,
   DecodedField,
 } from "@/lib/passport";
@@ -48,24 +49,32 @@ function ProfileInner() {
     setItems([]);
     try {
       // Try the EAS indexer first (fast, has data + decoded fields)
-      const r = await fetchProfileAllNetworks(addr);
+      let r = await fetchProfileAllNetworks(addr);
       // If the indexer returned nothing, fall back to a direct chain scan
       // so the user sees their attestations even if the indexer is lagging.
       if (r.length === 0) {
         try {
           const chainSepolia = await fetchProfileFromChain(addr, "84532");
           const chainMainnet = await fetchProfileFromChain(addr, "8453");
-          const merged = [...chainSepolia, ...chainMainnet];
-          if (merged.length > 0) {
-            setItems(merged);
+          r = [...chainSepolia, ...chainMainnet];
+          if (r.length > 0) {
+            // Hydrate the partial results with the on-chain data blob
+            // so the UI shows real agentName, did, owner, etc. — not "?".
+            await hydrateFromChain(r);
+            setItems(r);
             setError(
-              "These attestations were found by scanning the chain directly. The EAS indexer is lagging — try again in a few minutes for full decoding."
+              "These attestations were found by scanning the chain directly. The EAS indexer is lagging — the data shown is fully on-chain and authoritative."
             );
             return;
           }
         } catch {
           /* chain scan failed (RPC throttle, etc) — keep the indexer result */
         }
+      } else {
+        // Indexer returned results, but they may not have decoded data
+        // (e.g. for non-standard schemas). Try to hydrate any partial ones
+        // so the cards show as much detail as possible.
+        await hydrateFromChain(r);
       }
       setItems(r);
       if (r.length === 0) {
@@ -231,12 +240,18 @@ function AttestationCard({
   const title = isPassport ? "PASSPORT" : item.kind === "action" ? "ACTION RECEIPT" : "OTHER ATTESTATION";
   const issued = new Date(item.time * 1000).toLocaleString();
 
-  // Pull a few friendly fields from the decoded data for the card subtitle
+  // Pull a few friendly fields from the decoded data for the card subtitle.
+  // When the data hasn't been decoded yet (chain-scan fallback path), the
+  // decoded array may be null. Show a friendly "(data pending)" hint
+  // instead of "?" so the user knows we're working on it.
   const byField = (name: string): string | null => {
     const f = item.decoded?.find((d) => d.name === name);
     return f ? String(f.value) : null;
   };
-  const subtitle = isPassport
+  const hasDecoded = !!item.decoded && item.decoded.length > 0;
+  const subtitle = !hasDecoded
+    ? `on-chain (full data loading…)`
+    : isPassport
     ? `${byField("agentName") ?? "?"} · DID ${byField("did") ?? "?"}`
     : item.kind === "action"
     ? `${byField("action") ?? "?"} → ${byField("target") ?? "?"}`
@@ -262,7 +277,15 @@ function AttestationCard({
         {item.revoked && (
           <span className="pill" style={{ background: "#a33", color: "white" }}>REVOKED</span>
         )}
-        <span className="pill" style={{ background: "var(--paper)" }}>
+        <span
+          className="pill"
+          style={{
+            background: "var(--paper-2)",
+            color: "var(--ink-2)",
+            border: "1px solid var(--line)",
+            fontWeight: 500,
+          }}
+        >
           {item.network === "8453" ? "mainnet" : "Sepolia"}
         </span>
       </div>
