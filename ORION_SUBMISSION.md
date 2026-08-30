@@ -37,6 +37,7 @@ Deadline: **2026-09-02 23:59 UTC**  (countdown: ~3 days from last build)
 | `/register` | Connect wallet → mint passport → mint action receipts → revoke on-chain |
 | `/verify` | Paste any UID → see the decoded passport/action fields + EAScan link. Deep-link with `?uid=…&network=…` |
 | `/schemas` | The two registered EAS schemas with their UIDs and EAScan links per network |
+| `/profile` | Agent's portfolio — every EAS attestation where the address is attester or recipient, across Base mainnet and Base Sepolia. Falls back to direct on-chain `eth_getLogs` scan when the EAS indexer is lagging. Deep-link with `?address=0x…` |
 
 ## Pitch (for judges)
 "Every top Orion agent shows its receipt. PASSPORT is the receipt primitive for the agentic-
@@ -48,5 +49,8 @@ verifiable on-chain attestation on Base. No trust, no hype — just proof any bu
 - **`/verify` decodes ABI-encoded data** back into named fields (agentName, did, owner, mandate, payloadHash, timestamp) and pretty-prints JSON mandate strings. Deep-link via `?uid=…&network=…` for auto-verify.
 - **Interactive revoke** — the "revocable: true" promise is no longer just JSON; the UI calls `EAS.revoke()`.
 - **`/schemas` page** — judges can inspect the protocol itself, with deterministic UIDs and EAScan links.
+- **`/profile` portfolio page (round 3)** — the place to "gather your passports". Fetches every EAS attestation where the address is the attester or recipient across both Base networks, dedupes by UID, classifies as passport/action/other, decodes the data field, and renders a card per attestation with copy/verify/EAScan links. Falls back to direct `eth_getLogs` scan of the EAS contract when the EAS GraphQL indexer is lagging (which is the common case — the indexer is currently minutes-behind the chain for fresh mints).
+- **Indexer-bypass + on-chain diagnostic** — `/verify` no longer relies on the EAS indexer alone. When the indexer returns `null`, the page also calls `EAS.getAttestation(uid)` directly via the correct v1.5 ABI and shows one of three messages: ✓ "indexer just hasn't picked it up yet", ⚠ "phantom UID — the EAS call reverted silently", or "the attestation truly does not exist on-chain".
+- **EAS v1.5 ABI fix** — ethers v6 returns Result objects with numeric indices only when you pass a tuple ABI string. The lib now uses `att[2]` (time) and `att[7]` (attester) on the v1.5 struct order: `uid, schema, time, expirationTime, revocationTime, refUID, recipient, attester, revocable, data`.
 - **EAS bug fix** — `lib/eas.ts:66` `owner` type corrected from `bytes32` to `address` (the SDK was throwing `Incompatible param type: bytes32` on every mint).
 - **Build hardening** — `useSearchParams` wrapped in Suspense boundary (Next 14 requirement).
