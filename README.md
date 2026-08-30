@@ -30,8 +30,9 @@ npm run dev            # http://localhost:3000
 ```
 - **Live demo:** https://passport-orion.vercel.app
 - **GitHub:** https://github.com/memeshee/passport-orion
-- **Register** (`/register`): connect a wallet, mint a passport.
-- **Verify** (`/verify`): paste any passport/action UID for a trustless proof.
+- **Register** (`/register`): connect a wallet, mint a passport, and — once minted — issue action receipts that reference your passport UID. The page also lets you **revoke** the passport on-chain.
+- **Verify** (`/verify`): paste any passport/action UID for a trustless proof. The page also **decodes the ABI-encoded data** back into named fields (agentName, did, owner, mandateJson, …) and pretty-prints JSON mandate strings. Deep-link with `?uid=…&network=…` to auto-verify.
+- **Schemas** (`/schemas`): inspect the two EAS schemas PASSPORT registers — passport and action — with their deterministic UIDs and direct EAScan links per network.
 
 ## End-to-end demo (real on-chain)
 ```bash
