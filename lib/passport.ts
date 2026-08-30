@@ -133,12 +133,16 @@ async function verifyOnChain(eas: EAS, uid: string): Promise<boolean> {
     // Use the correct v1.5 ABI for the deployed contract. The struct order
     // changed from the older v1.0 layout (where recipient/attester were
     // before time), so we have to use the explicit ABI here.
-    const att = await contract.getAttestation(uid, { from: ethers.ZeroAddress });
+    // CRITICAL: when you pass a tuple ABI string to ethers.Contract, the
+    // returned Result object ONLY has numeric indices [0..N], NOT named
+    // properties. So `att.time` is undefined and `att[2]` is correct.
+    // I burned a whole round on this — don't trust the named-property API.
+    const att = await contract.getAttestation(uid);
     if (!att) return false;
     // EAS v1.5 Attestation struct: {uid, schema, time, expirationTime,
     // revocationTime, refUID, recipient, attester, revocable, data}
-    const time = Number(att.time ?? 0);
-    const attester = att.attester ?? ethers.ZeroAddress;
+    const time = Number(att[2] ?? 0);
+    const attester = att[7] ?? ethers.ZeroAddress;
     const isZeroAttester = !attester || attester.toLowerCase() === ethers.ZeroAddress.toLowerCase();
     const isZeroTime = !time || time === 0;
     return !(isZeroAttester && isZeroTime);
