@@ -55,23 +55,30 @@ async function waitForSchemaRegister(t: { wait(): Promise<any> }) {
  *  wallet/SDK surfaces them as opaque hex selectors. This maps the most
  *  common ones to human-readable names so the user sees the real cause. */
 const EAS_ERROR_SELECTORS: Record<string, string> = {
-  // EAS contract custom errors (selectors are first 4 bytes of keccak256("ErrorName()"))
-  "0x01a5f43d": "NotFound (schema or attestation doesn't exist on this chain)",
-  "0x01f8b7d4": "AlreadyExists (this schema/attestation is already registered)",
-  "0x07c9d3ea": "InvalidLength (one of the fields has an unsupported length)",
-  "0xcd4e8487": "InvalidSchema (the schema UID doesn't match any on-chain schema — schema may be unregistered on this chain)",
-  "0x0687fd1d": "NoValue (the contract was called with non-zero value but the method doesn't accept it)",
-  "0xb0edcfac": "InvalidAttestation (the attestation data is malformed or refers to a missing passport UID)",
-  "0x80c8e575": "InvalidExpirationTime (expiration must be 0 or in the future)",
-  "0xf3a82ffd": "InvalidRevocation (you tried to revoke an attestation that doesn't exist or isn't revocable)",
-  "0x6e2ee1e2": "InvalidResolver (the resolver address is invalid)",
-  "0x0f0a6d18": "InvalidSignature (the EIP712 signature is invalid)",
-  "0xd66c3007": "NotPayable (the contract was called with value but doesn't accept it)",
-  "0x39cc1e8a": "InsufficientValue (the msg.value is less than required)",
+  // EAS contract custom errors — selectors are keccak256("ErrorName()")[:4]
+  // computed from the EAS v1.5 source (EAS.sol).
+  "0xbf37b20e": "InvalidSchema (the schema UID doesn't match any on-chain schema — schema may be unregistered on this chain)",
+  "0xc5723b51": "NotFound (the requested attestation or schema doesn't exist on this chain)",
+  "0x23369fa6": "AlreadyExists (this schema/attestation is already registered)",
+  "0x947d5a84": "InvalidLength (one of the fields has an unsupported length)",
+  "0xf2365b5b": "NoValue (the contract was called with non-zero value but the method doesn't accept it)",
+  "0xbd8ba84d": "InvalidAttestation (the attestation data is malformed or refers to a missing passport UID)",
+  "0x08e8b937": "InvalidExpirationTime (expiration must be 0 or in the future)",
+  "0xccf3bb27": "InvalidRevocation (you tried to revoke an attestation that doesn't exist or isn't revocable)",
+  "0x6da3f654": "InvalidResolver (the resolver address is invalid)",
+  "0x8baa579f": "InvalidSignature (the EIP712 signature is invalid)",
+  "0x1574f9f3": "NotPayable (the contract was called with value but doesn't accept it)",
+  "0x11011294": "InsufficientValue (the msg.value is less than required)",
+  "0xdf8c6da3": "InvalidUID (the attestation UID is malformed)",
+  "0x4ca88867": "AccessDenied (the caller doesn't have permission — usually the attester for revoke)",
+  "0x905e7107": "AlreadyRevoked (you tried to revoke an attestation that's already revoked)",
+  "0x78ccf5a2": "NotAttestable (this schema or attestation is not attestable)",
+  "0x9414820d": "NotRevocable (this attestation is not revocable — set revocable: true on creation)",
+  "0xcd5f560b": "TooManyAttestations (batch size exceeds the per-call limit)",
   // Common require/panic patterns
   "0x4e487b71": "Panic(0x01) (assertion failed — likely a contract invariant was violated)",
-  // Generic fallback
-  "0x08c379a0": "Reverted with a reason string (check tx logs for the actual message)",
+  // String revert (Error(string))
+  "0x08c379a0": "Reverted with a reason string",
 };
 
 function decodeEasError(e: any): string {
