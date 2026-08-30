@@ -61,6 +61,7 @@ export default function Home() {
         <nav className="nav">
           <Link href="/register">Register</Link>
           <Link href="/verify">Verify</Link>
+          <Link href="/schemas">Schemas</Link>
         </nav>
       </header>
 

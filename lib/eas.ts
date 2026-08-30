@@ -63,7 +63,7 @@ export function encodePassport(data: {
   return encoder.encodeData([
     { name: "agentName", type: "string", value: data.agentName },
     { name: "did", type: "string", value: data.did },
-    { name: "owner", type: "bytes32", value: data.owner },
+    { name: "owner", type: "address", value: data.owner },
     { name: "agentType", type: "string", value: data.agentType },
     { name: "mandateJson", type: "string", value: data.mandateJson },
     { name: "ext", type: "string", value: data.ext },

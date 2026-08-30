@@ -105,6 +105,28 @@ export type ActionInput = {
 
 export type ActionResult = { uid: string; payloadHash: string };
 
+/**
+ * Revoke a previously-issued passport. Only the original attester (owner) can
+ * do this — EAS enforces it on-chain. After revocation, the UID is no longer
+ * "VALID" on the verify page (verifyAttestation returns valid=false with a
+ * revoked reason). This is the "mandate is revocable" promise made interactive.
+ */
+export async function revokePassport(
+  signer: ethers.Signer,
+  network: NetworkKey,
+  uid: string
+): Promise<{ txHash: string }> {
+  const eas: EAS = getEAS(network, signer);
+  const passportSchemaUid = SCHEMA_UIDS[network].passport;
+  const tx = await eas.revoke({
+    schema: passportSchemaUid,
+    data: { uid },
+  });
+  const txHash = (tx as any).hash ?? (tx as any).data?.hash ?? "";
+  await tx.wait();
+  return { txHash };
+}
+
 export async function attestAction(
   signer: ethers.Signer,
   network: NetworkKey,
@@ -160,10 +182,15 @@ export async function attestAction(
   return { uid, payloadHash: "0x" + payloadHash };
 }
 
+export type DecodedField = { name: string; type: string; value: any };
 export type VerificationStatus = {
   valid: boolean;
   reason: string;
   attestation?: any;
+  // When the attestation uses one of our schemas, decode the ABI-encoded `data`
+  // field back into named fields. null if the schema is not a passport / action
+  // schema we know about.
+  decoded?: { kind: "passport" | "action"; fields: DecodedField[] } | null;
 };
 
 /**
@@ -191,13 +218,55 @@ export async function verifyAttestation(
     const json = await res.json();
     const att = json?.data?.attestation;
     if (!att) {
-      return { valid: false, reason: "No attestation found for this UID on " + network };
+      return { valid: false, reason: "No attestation found for this UID on " + network, decoded: null };
     }
     if (att.revoked) {
-      return { valid: false, reason: "Attestation has been revoked.", attestation: att };
+      return { valid: false, reason: "Attestation has been revoked.", attestation: att, decoded: null };
     }
-    return { valid: true, reason: "Verified on-chain via EAS.", attestation: att };
+
+    // If the schema is one of ours, decode the ABI-encoded `data` field so the
+    // UI can show the actual agentName / did / owner / mandate — not raw bytes.
+    let decoded: VerificationStatus["decoded"] = null;
+    try {
+      const schemaUid = (att.schemaId || "").toLowerCase();
+      const passportUid = SCHEMA_UIDS[network].passport.toLowerCase();
+      const actionUid = SCHEMA_UIDS[network].action.toLowerCase();
+      if (schemaUid === passportUid && typeof att.data === "string" && att.data.startsWith("0x")) {
+        decoded = { kind: "passport", fields: decodeData(PASSPORT_SCHEMA, att.data) };
+      } else if (schemaUid === actionUid && typeof att.data === "string" && att.data.startsWith("0x")) {
+        decoded = { kind: "action", fields: decodeData(ACTION_SCHEMA, att.data) };
+      }
+    } catch {
+      // Decoding is best-effort; if it fails we still return a valid attestation.
+      decoded = null;
+    }
+
+    return { valid: true, reason: "Verified on-chain via EAS.", attestation: att, decoded };
   } catch (e: any) {
-    return { valid: false, reason: "Verification request failed: " + (e?.message ?? e) };
+    return { valid: false, reason: "Verification request failed: " + (e?.message ?? e), decoded: null };
   }
+}
+
+/**
+ * Decode an ABI-encoded attestation payload against a known schema. We can't use
+ * the SDK's decodeData in the browser bundle (it pulls lodash via the SDK's
+ * ESM index and that import breaks under bare `tsc --noEmit`). Instead, decode
+ * the simple types we use (string / address / uint64) directly with ethers.
+ */
+function decodeData(schema: string, hexData: string): DecodedField[] {
+  const fields: DecodedField[] = [];
+  // Parse schema like:  "string agentName,string did,address owner,..."
+  const parts = schema.split(",").map((s) => s.trim());
+  // ethers.AbiCoder.decode can decode the whole tuple at once when we know the
+  // top-level types. For "string" + "address" + "uint64" the canonical tuple
+  // encoding is the same as the dynamic schema encoder output.
+  const topTypes = parts.map((p) => p.split(/\s+/)[0]);
+  const decoded = ethers.AbiCoder.defaultAbiCoder().decode(topTypes, hexData);
+  parts.forEach((p, i) => {
+    const [type, name] = p.split(/\s+/);
+    let v: any = decoded[i];
+    if (type === "uint64" || type === "uint256") v = v.toString();
+    fields.push({ name, type, value: v });
+  });
+  return fields;
 }
