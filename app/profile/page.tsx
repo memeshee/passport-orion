@@ -7,6 +7,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { ethers } from "ethers";
 import {
   fetchProfileAllNetworks,
+  fetchProfileFromChain,
   ProfileAttestation,
   DecodedField,
 } from "@/lib/passport";
@@ -46,10 +47,29 @@ function ProfileInner() {
     setBusy(true);
     setItems([]);
     try {
+      // Try the EAS indexer first (fast, has data + decoded fields)
       const r = await fetchProfileAllNetworks(addr);
+      // If the indexer returned nothing, fall back to a direct chain scan
+      // so the user sees their attestations even if the indexer is lagging.
+      if (r.length === 0) {
+        try {
+          const chainSepolia = await fetchProfileFromChain(addr, "84532");
+          const chainMainnet = await fetchProfileFromChain(addr, "8453");
+          const merged = [...chainSepolia, ...chainMainnet];
+          if (merged.length > 0) {
+            setItems(merged);
+            setError(
+              "These attestations were found by scanning the chain directly. The EAS indexer is lagging — try again in a few minutes for full decoding."
+            );
+            return;
+          }
+        } catch {
+          /* chain scan failed (RPC throttle, etc) — keep the indexer result */
+        }
+      }
       setItems(r);
       if (r.length === 0) {
-        setError("No EAS attestations found for this address on Base mainnet or Base Sepolia yet.");
+        setError("No EAS attestations found for this address on Base mainnet or Base Sepolia yet. Mint a passport on /register to get started.");
       }
     } catch (e: any) {
       setError(e?.message ?? String(e));

@@ -618,22 +618,34 @@ const EAS_EXPLORER: Record<NetworkKey, string> = {
   "84532": "https://sepolia.easscan.org",
 };
 
+const RPC_URLS: Record<NetworkKey, ethers.JsonRpcProvider> = {
+  "8453": new ethers.JsonRpcProvider("https://mainnet.base.org"),
+  "84532": new ethers.JsonRpcProvider("https://sepolia.base.org"),
+};
+
 /** Build the EAS GraphQL `attestations` query (paginated). Returns the
  *  attestation records and a `hasMore` flag — the caller can page by
- *  incrementing the `skip` variable. */
+ *  incrementing the `skip` variable.
+ *
+ *  EAS indexer schema note: the actual `attestations` field on
+ *  easscan.org / sepolia.easscan.org uses Prisma-style pagination
+ *  (`take`/`skip`), NOT Relay-style (`first`/`after`). The `orderBy`
+ *  field is a LIST of `{ field: 'asc'|'desc' }` objects, not an enum.
+ *  The previous `first`/`orderBy: time` syntax returned 400 errors
+ *  ("Unknown argument first", "Expected AttestationOrderByWithRelationInput").
+ *  Discovered via direct __schema introspection on 2026-08-30. */
 async function queryAttestationsBy(
   endpoint: string,
   field: "attester" | "recipient",
   address: string,
   skip = 0,
-  first = 100
+  take = 100
 ): Promise<{ items: any[]; hasMore: boolean }> {
-  const query = `query($first: Int!, $skip: Int!, $where: AttestationWhereInput!) {
+  const query = `query($take: Int!, $skip: Int!, $where: AttestationWhereInput!, $orderBy: [AttestationOrderByWithRelationInput!]) {
     attestations(
-      first: $first
+      take: $take
       skip: $skip
-      orderBy: time
-      orderDirection: desc
+      orderBy: $orderBy
       where: $where
     ) {
       id schemaId attester recipient revoked revocable
@@ -641,16 +653,22 @@ async function queryAttestationsBy(
     }
   }`;
   // EAS indexer expects the address as the lowercase 0x-prefixed string.
-  const where: any = {};
-  where[field] = { equals: address.toLowerCase() };
+  const where: any = { [field]: { equals: address.toLowerCase() } };
   const res = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, variables: { first, skip, where } }),
+    body: JSON.stringify({
+      query,
+      variables: { take, skip, where, orderBy: [{ time: "desc" }] },
+    }),
   });
   const json = await res.json();
+  if (json?.errors) {
+    // Surface a useful error for debugging in the profile page
+    throw new Error(`EAS indexer error: ${json.errors[0]?.message ?? "unknown"}`);
+  }
   const items: any[] = json?.data?.attestations ?? [];
-  return { items, hasMore: items.length === first };
+  return { items, hasMore: items.length === take };
 }
 
 /** Fetch all EAS attestations for an address across one network, both as
@@ -706,6 +724,89 @@ export async function fetchProfile(
   }
   // Sort newest first
   out.sort((a, b) => b.time - a.time);
+  return out;
+}
+
+/** On-chain fallback: scan the EAS contract for `Attested` events where
+ *  the address is the recipient. This is what the indexer would return
+ *  once it catches up — but we can pull directly from the chain to bypass
+ *  the indexer's lag. Uses eth_getLogs with the EAS contract's
+ *  `Attested(address,address,bytes32,bytes32)` event topic, filtering
+ *  by the recipient address (second indexed arg, topic[2]).
+ *
+ *  Returns attestations in the same ProfileAttestation shape as
+ *  fetchProfile so the UI can merge them. The `decoded` field is left
+ *  null because we don't have the data blob from events alone. */
+export async function fetchProfileFromChain(
+  address: string,
+  network: NetworkKey
+): Promise<ProfileAttestation[]> {
+  if (!ethers.isAddress(address)) return [];
+  const provider = RPC_URLS[network];
+  const explorer = EAS_EXPLORER[network];
+  // EAS contract address
+  const easAddr = "0x4200000000000000000000000000000000000021";
+  // Attested(address indexed recipient, address indexed attester, bytes32 uid, bytes32 indexed schemaId)
+  // The recipient is the first indexed arg → topic[1] is the recipient.
+  // We use a padded lowercase address as the topic filter.
+  const padded = "0x" + address.toLowerCase().replace(/^0x/, "").padStart(64, "0");
+  // EAS uses base block 0 → we paginate by chunks. The public Base RPCs
+  // (mainnet.base.org, sepolia.base.org) cap eth_getLogs to a 10,000-block
+  // range, so we use 9,000 as a safe chunk size and retry once on
+  // "limit exceeded" errors.
+  const CHUNK = 9000n;
+  const head = BigInt(await provider.getBlockNumber());
+  const out: ProfileAttestation[] = [];
+  const seen = new Set<string>();
+  for (let from = head > CHUNK ? head - CHUNK : 0n; from > 0n && from < head; ) {
+    const to = from + CHUNK > head ? head : from + CHUNK;
+    let logs: any[] = [];
+    let attempt = 0;
+    while (attempt < 2) {
+      try {
+        logs = await provider.getLogs({
+          address: easAddr,
+          topics: [null, padded],
+          fromBlock: from,
+          toBlock: to,
+        });
+        break;
+      } catch (e: any) {
+        // If the chunk was too large, halve it and retry
+        if (attempt === 0) {
+          from = from + (to - from) / 2n;
+          attempt++;
+          continue;
+        }
+        break;
+      }
+    }
+    for (const l of logs) {
+      // Parse the Attested event
+      // topic[1] = recipient, topic[2] = attester, topic[3] = schemaId, data[0:32] = uid
+      const recipient = "0x" + (l.topics[1] ?? "").slice(26);
+      const attester = "0x" + (l.topics[2] ?? "").slice(26);
+      const schemaId = l.topics[3] ?? ethers.ZeroHash;
+      const uid = "0x" + (l.data ?? "").slice(2, 66);
+      if (!uid || seen.has(uid)) continue;
+      seen.add(uid);
+      out.push({
+        uid,
+        schemaId: schemaId.toLowerCase(),
+        kind: schemaId.toLowerCase() === SCHEMA_UIDS[network].passport.toLowerCase() ? "passport"
+            : schemaId.toLowerCase() === SCHEMA_UIDS[network].action.toLowerCase() ? "action" : "other",
+        attester,
+        recipient,
+        time: 0, // unknown from event alone
+        revoked: false,
+        revocable: true,
+        decoded: null,
+        network,
+        explorerUrl: `${explorer}/attestation/view/${uid}`,
+      });
+    }
+    from = to + 1n;
+  }
   return out;
 }
 
