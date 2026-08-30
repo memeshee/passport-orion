@@ -50,6 +50,50 @@ async function waitForSchemaRegister(t: { wait(): Promise<any> }) {
   return result;
 }
 
+/** Decode known EAS contract custom errors. The EAS contract uses many custom
+ *  errors (InvalidSchema, AttestationNotFound, AlreadyExists, etc.) and the
+ *  wallet/SDK surfaces them as opaque hex selectors. This maps the most
+ *  common ones to human-readable names so the user sees the real cause. */
+const EAS_ERROR_SELECTORS: Record<string, string> = {
+  // EAS contract custom errors (selectors are first 4 bytes of keccak256("ErrorName()"))
+  "0x01a5f43d": "NotFound (schema or attestation doesn't exist on this chain)",
+  "0x01f8b7d4": "AlreadyExists (this schema/attestation is already registered)",
+  "0x07c9d3ea": "InvalidLength (one of the fields has an unsupported length)",
+  "0xcd4e8487": "InvalidSchema (the schema UID doesn't match any on-chain schema — schema may be unregistered on this chain)",
+  "0x0687fd1d": "NoValue (the contract was called with non-zero value but the method doesn't accept it)",
+  "0xb0edcfac": "InvalidAttestation (the attestation data is malformed or refers to a missing passport UID)",
+  "0x80c8e575": "InvalidExpirationTime (expiration must be 0 or in the future)",
+  "0xf3a82ffd": "InvalidRevocation (you tried to revoke an attestation that doesn't exist or isn't revocable)",
+  "0x6e2ee1e2": "InvalidResolver (the resolver address is invalid)",
+  "0x0f0a6d18": "InvalidSignature (the EIP712 signature is invalid)",
+  "0xd66c3007": "NotPayable (the contract was called with value but doesn't accept it)",
+  "0x39cc1e8a": "InsufficientValue (the msg.value is less than required)",
+  // Common require/panic patterns
+  "0x4e487b71": "Panic(0x01) (assertion failed — likely a contract invariant was violated)",
+  // Generic fallback
+  "0x08c379a0": "Reverted with a reason string (check tx logs for the actual message)",
+};
+
+function decodeEasError(e: any): string {
+  // ethers v6 puts the custom error selector in e.data; v5 put it in e.error.data
+  const data: string | undefined = e?.data ?? e?.error?.data ?? e?.error?.error?.data;
+  if (data && typeof data === "string" && data.startsWith("0x") && data.length >= 10) {
+    const sel = data.slice(0, 10).toLowerCase();
+    const known = EAS_ERROR_SELECTORS[sel];
+    if (known) return known;
+    // String revert (Error(string))
+    if (sel === "0x08c379a0" && data.length > 74) {
+      try {
+        const reason = ethers.toUtf8String("0x" + data.slice(138));
+        if (reason) return `Reverted: "${reason}"`;
+      } catch {}
+    }
+    return `unknown custom error ${sel} (check the tx logs on the explorer for the full revert reason)`;
+  }
+  // Non-custom-error path (e.g. "out of gas", "nonce has already been used")
+  return e?.shortMessage ?? e?.message ?? String(e);
+}
+
 export type PassportInput = {
   agentName: string;
   owner: string; // 0x address
@@ -149,9 +193,10 @@ export async function createPassport(
     // with a custom error like "AttestationNotFound" or "InvalidSchema" when
     // the schema UID doesn't match a real on-chain schema.
     txHash = (tx as any).receipt?.hash ?? (tx as any).data?.hash ?? "";
+    const decoded = decodeEasError(e);
     throw new Error(
-      `Mint failed: ${e?.shortMessage ?? e?.message ?? e}. ` +
-      `Tx hash: ${txHash || "(unknown)"} — check the explorer for the revert reason.`
+      `Mint failed: ${decoded}. Tx hash: ${txHash || "(unknown)"} — ` +
+      `check the explorer for the revert reason.`
     );
   }
   return { uid, did, txHash };
@@ -240,7 +285,17 @@ export async function attestAction(
       data,
     },
   });
-  const uid = await waitForAttest(tx);
+  let uid: string;
+  try {
+    uid = await waitForAttest(tx);
+  } catch (e: any) {
+    const decoded = decodeEasError(e);
+    const txHash = (tx as any).receipt?.hash ?? (tx as any).data?.hash ?? "";
+    throw new Error(
+      `Issue receipt failed: ${decoded}. ` +
+      `Tx hash: ${txHash || "(unknown)"} — check the explorer for the revert reason.`
+    );
+  }
   return { uid, payloadHash: "0x" + payloadHash };
 }
 
