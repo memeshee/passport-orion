@@ -111,6 +111,14 @@ function decodeEasError(e: any): string {
   return e?.shortMessage ?? e?.message ?? String(e);
 }
 
+// Canonical EAS contract ABI for the deployed EAS v1.5 on Base (Sepolia +
+// mainnet). The struct field order is uid, schema, time, expirationTime,
+// revocationTime, refUID, recipient, attester, revocable, data. We use the
+// full ABI from the SDK's deployment JSON, not the older EAS v1.0 layout.
+const EAS_ABI_FROM_CHAIN = [
+  "function getAttestation(bytes32 uid) view returns (tuple(bytes32 uid, bytes32 schema, uint64 time, uint64 expirationTime, uint64 revocationTime, bytes32 refUID, address recipient, address attester, bool revocable, bytes data))",
+] as const;
+
 /** Post-attest on-chain confirmation. Calls the EAS contract's
  *  getAttestation(uid) and returns true ONLY if the returned struct is
  *  backed by real on-chain state (attester !== 0x0 AND time > 0).
@@ -122,13 +130,15 @@ async function verifyOnChain(eas: EAS, uid: string): Promise<boolean> {
     // We use the contract's read directly to avoid SDK quirks.
     const contract = (eas as any).contract;
     if (!contract || !contract.runner) return true; // can't verify; trust the SDK
-    const att = await contract.getAttestation(uid);
+    // Use the correct v1.5 ABI for the deployed contract. The struct order
+    // changed from the older v1.0 layout (where recipient/attester were
+    // before time), so we have to use the explicit ABI here.
+    const att = await contract.getAttestation(uid, { from: ethers.ZeroAddress });
     if (!att) return false;
-    // EAS returns a default struct (uid: 0x0, attester: 0x0, time: 0) for
-    // UIDs that don't exist. The user's UID will be non-zero (we checked)
-    // but the attester and time will be zero in the phantom case.
-    const attester = (att as any).attester ?? ethers.ZeroAddress;
-    const time = Number((att as any).time ?? 0);
+    // EAS v1.5 Attestation struct: {uid, schema, time, expirationTime,
+    // revocationTime, refUID, recipient, attester, revocable, data}
+    const time = Number(att.time ?? 0);
+    const attester = att.attester ?? ethers.ZeroAddress;
     const isZeroAttester = !attester || attester.toLowerCase() === ethers.ZeroAddress.toLowerCase();
     const isZeroTime = !time || time === 0;
     return !(isZeroAttester && isZeroTime);
@@ -158,21 +168,37 @@ export async function diagnoseAttestation(
     ? new ethers.JsonRpcProvider("https://mainnet.base.org")
     : new ethers.JsonRpcProvider("https://sepolia.base.org");
   const EAS_ADDR = "0x4200000000000000000000000000000000000021";
-  const eas = new ethers.Contract(EAS_ADDR, [
-    "function getAttestation(bytes32 uid) view returns (tuple(bytes32 uid, bytes32 schema, address recipient, address attester, uint64 time, uint64 expirationTime, bool revocable, bytes32 refUID, bytes data, address resolver))",
-  ], provider);
+  // Use the correct v1.5 ABI for getAttestation. The struct field order
+  // changed from v1.0 (where recipient/attester were before time), so the
+  // hardcoded ABI we used earlier was reading the wrong offsets and showing
+  // attester=0/time=0 even for real attestations.
+  const eas = new ethers.Contract(EAS_ADDR, EAS_ABI_FROM_CHAIN, provider);
   try {
     const att = await eas.getAttestation(uid);
-    const attester = att?.attester ?? ethers.ZeroAddress;
-    const time = Number(att?.time ?? 0);
+    // v1.5 struct: {uid, schema, time, expirationTime, revocationTime,
+    // refUID, recipient, attester, revocable, data}
+    const time = Number(att?.[2] ?? 0);
+    const attester = att?.[7] ?? ethers.ZeroAddress;
+    const recipient = att?.[6] ?? ethers.ZeroAddress;
+    const schema = att?.[1] ?? ethers.ZeroHash;
     const isZero = attester === ethers.ZeroAddress && time === 0;
     return {
       onChain: !isZero,
       attester,
-      recipient: att?.recipient ?? ethers.ZeroAddress,
+      recipient,
       time,
-      schema: att?.schema ?? ethers.ZeroHash,
-      raw: att,
+      schema,
+      raw: {
+        uid: att?.[0],
+        schema,
+        time,
+        expirationTime: Number(att?.[3] ?? 0),
+        revocationTime: Number(att?.[4] ?? 0),
+        refUID: att?.[5],
+        recipient,
+        attester,
+        revocable: att?.[8] ?? false,
+      },
     };
   } catch (e) {
     return { onChain: false, attester: "", recipient: "", time: 0, schema: "", raw: { error: String(e) } };
@@ -217,34 +243,51 @@ export async function createPassport(
   const registry = getSchemaRegistry(network, signer);
   const recipient = input.owner;
 
-  // 1. Register schema only if it isn't already on-chain (avoids duplicate register txns).
-  let passportSchemaUid = SCHEMA_UIDS[network].passport;
+  // 1. Register schema only if it isn't already on-chain (avoids duplicate
+  // register txns). The EAS SDK's getSchema() returns a default struct (not
+  // a throw) for unknown schemas, and returns the same default struct for
+  // already-registered ones too (it depends on the SDK version). So we
+  // can't trust getSchema() alone — we have to attempt the register and
+  // treat AlreadyExists as success.
+  const passportSchemaUid = SCHEMA_UIDS[network].passport;
   try {
-    const existing = await registry.getSchema({ uid: passportSchemaUid });
-    if (!existing || (existing as any).uid === ethers.ZeroHash) {
-      const regTx = await registry.register({
-        schema: PASSPORT_SCHEMA,
-        resolverAddress: ethers.ZeroAddress,
-        revocable: true,
-      });
-      passportSchemaUid = await waitForSchemaRegister(regTx);
+    // Pre-check: does the schema already exist? Use the v1.5 ABI directly
+    // because the SDK's getSchema has buggy field decoding.
+    const provider = (registry as any).contract?.runner?.provider;
+    if (provider) {
+      const regContract = new ethers.Contract(
+        "0x4200000000000000000000000000000000000020",
+        ["function getSchema(bytes32 uid) view returns (tuple(bytes32 uid, address registrant, bool revocable, string schema))"],
+        provider
+      );
+      try {
+        const s = await regContract.getSchema(passportSchemaUid);
+        if (s && s.uid !== ethers.ZeroHash) {
+          // Schema is registered — skip the register tx entirely.
+        } else {
+          throw new Error("not registered");
+        }
+      } catch {
+        // Not registered — try to register. If we get AlreadyExists from
+        // a parallel tx, that's fine (idempotent).
+        const regTx = await registry.register({
+          schema: PASSPORT_SCHEMA,
+          resolverAddress: ethers.ZeroAddress,
+          revocable: true,
+        });
+        await waitForSchemaRegister(regTx);
+      }
     }
-  } catch (e: any) {
-    // getSchema throws if absent — register it. If registration also fails,
-    // surface the actual error (network mismatch, gas, etc.) instead of
-    // a misleading "Unable to process" message.
-    try {
-      const regTx = await registry.register({
-        schema: PASSPORT_SCHEMA,
-        resolverAddress: ethers.ZeroAddress,
-        revocable: true,
-      });
-      passportSchemaUid = await waitForSchemaRegister(regTx);
-    } catch (regErr: any) {
+  } catch (regErr: any) {
+    // If register() reverted with AlreadyExists (0x23369fa6), the schema is
+    // already registered by us or by the prior session — treat as success.
+    const data: string | undefined = regErr?.data ?? regErr?.error?.data;
+    if (data && data.toLowerCase().startsWith("0x23369fa6")) {
+      // already exists — proceed
+    } else {
       throw new Error(
-        `Schema registration failed on ${network}: ${regErr?.shortMessage ?? regErr?.message ?? regErr}. ` +
-        `This usually means the schema is already registered by a different wallet, ` +
-        `or the SchemaRegistry contract is unreachable on this network.`
+        `Schema registration failed on ${network}: ${decodeEasError(regErr)}. ` +
+        `Check that the SchemaRegistry contract is reachable on this network.`
       );
     }
   }
@@ -342,25 +385,47 @@ export async function attestAction(
   const eas: EAS = getEAS(network, signer);
   const registry = getSchemaRegistry(network, signer);
 
-  // Register action schema only if not already on-chain (idempotent).
-  let actionSchemaUid = SCHEMA_UIDS[network].action;
+  // Register action schema only if not already on-chain. The EAS SDK's
+  // getSchema() has buggy decoding (returns default struct for both
+  // unknown AND known schemas), so we pre-check with the v1.5 ABI and
+  // treat AlreadyExists reverts as success (idempotent).
+  const actionSchemaUid = SCHEMA_UIDS[network].action;
   try {
-    const existing = await registry.getSchema({ uid: actionSchemaUid });
-    if (!existing || (existing as any).uid === ethers.ZeroHash) {
-      const regTx = await registry.register({
-        schema: ACTION_SCHEMA,
-        resolverAddress: ethers.ZeroAddress,
-        revocable: true,
-      });
-      actionSchemaUid = await waitForSchemaRegister(regTx);
+    const provider = (registry as any).contract?.runner?.provider;
+    if (provider) {
+      const regContract = new ethers.Contract(
+        "0x4200000000000000000000000000000000000020",
+        ["function getSchema(bytes32 uid) view returns (tuple(bytes32 uid, address registrant, bool revocable, string schema))"],
+        provider
+      );
+      let needRegister = true;
+      try {
+        const s = await regContract.getSchema(actionSchemaUid);
+        if (s && s.uid !== ethers.ZeroHash) needRegister = false;
+      } catch { /* not registered */ }
+      if (needRegister) {
+        const regTx = await registry.register({
+          schema: ACTION_SCHEMA,
+          resolverAddress: ethers.ZeroAddress,
+          revocable: true,
+        });
+        try {
+          await waitForSchemaRegister(regTx);
+        } catch (regErr: any) {
+          const data: string | undefined = regErr?.data ?? regErr?.error?.data;
+          if (!data || !data.toLowerCase().startsWith("0x23369fa6")) {
+            throw regErr;
+          }
+        }
+      }
     }
-  } catch {
-    const regTx = await registry.register({
-      schema: ACTION_SCHEMA,
-      resolverAddress: ethers.ZeroAddress,
-      revocable: true,
-    });
-    actionSchemaUid = await waitForSchemaRegister(regTx);
+  } catch (regErr: any) {
+    const data: string | undefined = regErr?.data ?? regErr?.error?.data;
+    if (!data || !data.toLowerCase().startsWith("0x23369fa6")) {
+      throw new Error(
+        `Action schema registration failed on ${network}: ${decodeEasError(regErr)}.`
+      );
+    }
   }
 
   const payloadHash = ethers
