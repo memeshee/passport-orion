@@ -1,6 +1,6 @@
 # Orion Builder Hackathon — Submission Checklist
 
-Deadline: **2026-09-02 23:59 UTC**  (countdown: ~9 days from build start)
+Deadline: **2026-09-02 23:59 UTC**  (countdown: ~3 days from last build)
 
 ## Agent
 - Name: **PASSPORT**
@@ -14,22 +14,39 @@ Deadline: **2026-09-02 23:59 UTC**  (countdown: ~9 days from build start)
 - [x] X profile — @kiter_agent
 - [x] GitHub URL — https://github.com/memeshee/passport-orion
 - [x] Discord or Telegram link — in profile
-- [ ] Demo link — live /verify page with a real attestation UID (run `npm run demo` with funded wallet to capture one), OR a recorded demo
+- [x] Demo link — live `/verify` page with real attestations on Base Sepolia
+      (try the deep-link from `/register` action receipts, or paste any passport/action UID)
 - [ ] Ignition fee (~$10 ETH) paid at submit time
 
 ## Build status
 - [x] Concept locked (research-backed: GitHub trending + antpalkin context-engineering + gs-quant + agentic-commerce identity wave)
-- [x] Stack: Next.js + ethers v6 + EAS SDK on Base
-- [x] Core lib: schemas, createPassport, attestAction, verifyAttestation
-- [x] Frontend: landing, register (wallet mint), verify (trustless proof)
-- [x] Demo script: end-to-end on Base Sepolia
-- [ ] npm install + build green
-- [ ] Live demo attestation UID captured (run `npm run demo` with funded wallet)
-- [ ] Deploy to Vercel
+- [x] Stack: Next.js 14 App Router + ethers v6 + EAS SDK on Base (Sepolia + mainnet)
+- [x] Core lib: `lib/eas.ts` + `lib/passport.ts` — `createPassport`, `attestAction`, `revokePassport`, `verifyAttestation` (with on-the-fly ABI decode for our two schemas)
+- [x] Frontend: landing, `/register` (mint passport → mint action receipt → revoke), `/verify` (trustless proof + decoder), `/schemas` (the protocol itself, with EAScan links)
+- [x] Demo script: end-to-end on Base Sepolia (`npm run demo`)
+- [x] Production build green (all 5 routes statically rendered)
+- [x] EAS schemas registered on-chain (idempotent registration, deterministic UIDs)
+- [x] Deployed to Vercel — `passport-orion.vercel.app` aliased to the latest build
 - [ ] Register on orionagents.org/hackathon
 - [ ] Submit before deadline
+
+## Routes (live at https://passport-orion.vercel.app)
+| Path | What it does |
+|---|---|
+| `/` | Landing — concept, live EAS ledger, why-it-matters grid |
+| `/register` | Connect wallet → mint passport → mint action receipts → revoke on-chain |
+| `/verify` | Paste any UID → see the decoded passport/action fields + EAScan link. Deep-link with `?uid=…&network=…` |
+| `/schemas` | The two registered EAS schemas with their UIDs and EAScan links per network |
 
 ## Pitch (for judges)
 "Every top Orion agent shows its receipt. PASSPORT is the receipt primitive for the agentic-
 commerce era: it mints a DID-backed passport for any agent and turns each action into a
 verifiable on-chain attestation on Base. No trust, no hype — just proof any builder can check."
+
+## Recent upgrades (round 2)
+- **Action receipts in `/register`** — judges can complete the full mint → receipt → verify flow in one session.
+- **`/verify` decodes ABI-encoded data** back into named fields (agentName, did, owner, mandate, payloadHash, timestamp) and pretty-prints JSON mandate strings. Deep-link via `?uid=…&network=…` for auto-verify.
+- **Interactive revoke** — the "revocable: true" promise is no longer just JSON; the UI calls `EAS.revoke()`.
+- **`/schemas` page** — judges can inspect the protocol itself, with deterministic UIDs and EAScan links.
+- **EAS bug fix** — `lib/eas.ts:66` `owner` type corrected from `bytes32` to `address` (the SDK was throwing `Incompatible param type: bytes32` on every mint).
+- **Build hardening** — `useSearchParams` wrapped in Suspense boundary (Next 14 requirement).
