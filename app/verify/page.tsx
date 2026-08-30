@@ -187,6 +187,24 @@ function VerifyPageInner() {
               {result.valid ? "✓ VALID — " : "✗ INVALID — "}
               {result.reason}
             </p>
+            {!result.valid && (result as any).attestationOnNetwork && (
+              <div style={{ marginTop: 12, padding: 12, background: "var(--paper)", border: "1px solid var(--seal)", borderRadius: 2 }}>
+                <p style={{ fontSize: 13, color: "var(--ink)", marginBottom: 8 }}>
+                  💡 We auto-checked the other network and found your attestation there. One click to verify it:
+                </p>
+                <button
+                  className="btn"
+                  style={{ fontSize: 12, padding: "8px 14px" }}
+                  onClick={() => {
+                    const otherNet = (result as any).attestationOnNetwork as NetworkKey;
+                    setNetwork(otherNet);
+                    doVerify(uid, otherNet);
+                  }}
+                >
+                  Verify on Base {(result as any).attestationOnNetwork === "8453" ? "mainnet" : "Sepolia"} instead ↗
+                </button>
+              </div>
+            )}
             {result.attestation && (
               <div className="mono" style={{ marginTop: 14, fontSize: 13, color: "var(--ink-soft)" }}>
                 <div>

@@ -218,6 +218,31 @@ export async function verifyAttestation(
     const json = await res.json();
     const att = json?.data?.attestation;
     if (!att) {
+      // Auto-retry on the other network — UID lookups are case-sensitive
+      // address checksums, and the most common failure mode is "I minted on
+      // mainnet, the verify page defaulted to Sepolia (or vice versa)".
+      const other: NetworkKey = network === "84532" ? "8453" : "84532";
+      try {
+        const otherRes = await fetch(EAS_GRAPHQL[other], {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query, variables: { where: { id: uid } } }),
+        });
+        const otherJson = await otherRes.json();
+        if (otherJson?.data?.attestation) {
+          return {
+            valid: false,
+            reason:
+              `No attestation found on ${network} (Base ${network === "8453" ? "mainnet" : "Sepolia"}), but the same UID resolves on ${other} (Base ${other === "8453" ? "mainnet" : "Sepolia"}). Did you mean to verify there?`,
+            attestation: otherJson.data.attestation,
+            attestationOnNetwork: other,
+            decoded: null,
+            triedNetworks: [network, other],
+          } as VerificationStatus & { attestationOnNetwork?: NetworkKey; triedNetworks?: NetworkKey[] };
+        }
+      } catch {
+        /* fall through to the original "not found" response */
+      }
       return { valid: false, reason: "No attestation found for this UID on " + network, decoded: null };
     }
     if (att.revoked) {
