@@ -140,6 +140,45 @@ async function verifyOnChain(eas: EAS, uid: string): Promise<boolean> {
   }
 }
 
+/** Public diagnostic: returns the raw on-chain state for a UID. Used by
+ *  /verify to show a "Why is this not found?" panel when the indexer
+ *  returns null but the user wants to know if the contract has the data. */
+export async function diagnoseAttestation(
+  uid: string,
+  network: NetworkKey
+): Promise<{
+  onChain: boolean;
+  attester: string;
+  recipient: string;
+  time: number;
+  schema: string;
+  raw: any;
+}> {
+  const provider = network === "8453"
+    ? new ethers.JsonRpcProvider("https://mainnet.base.org")
+    : new ethers.JsonRpcProvider("https://sepolia.base.org");
+  const EAS_ADDR = "0x4200000000000000000000000000000000000021";
+  const eas = new ethers.Contract(EAS_ADDR, [
+    "function getAttestation(bytes32 uid) view returns (tuple(bytes32 uid, bytes32 schema, address recipient, address attester, uint64 time, uint64 expirationTime, bool revocable, bytes32 refUID, bytes data, address resolver))",
+  ], provider);
+  try {
+    const att = await eas.getAttestation(uid);
+    const attester = att?.attester ?? ethers.ZeroAddress;
+    const time = Number(att?.time ?? 0);
+    const isZero = attester === ethers.ZeroAddress && time === 0;
+    return {
+      onChain: !isZero,
+      attester,
+      recipient: att?.recipient ?? ethers.ZeroAddress,
+      time,
+      schema: att?.schema ?? ethers.ZeroHash,
+      raw: att,
+    };
+  } catch (e) {
+    return { onChain: false, attester: "", recipient: "", time: 0, schema: "", raw: { error: String(e) } };
+  }
+}
+
 export type PassportInput = {
   agentName: string;
   owner: string; // 0x address

@@ -4,7 +4,7 @@ import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { useSearchParams } from "next/navigation";
-import { verifyAttestation } from "@/lib/passport";
+import { verifyAttestation, diagnoseAttestation } from "@/lib/passport";
 
 type NetworkKey = "84532" | "8453";
 
@@ -77,6 +77,7 @@ function VerifyPageInner() {
   const [uid, setUid] = useState<string>("");
   const [network, setNetwork] = useState<NetworkKey>("84532");
   const [result, setResult] = useState<any>(null);
+  const [diagnostic, setDiagnostic] = useState<any>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -103,9 +104,17 @@ function VerifyPageInner() {
     setBusy(true);
     setError("");
     setResult(null);
+    setDiagnostic(null);
     try {
       const res = await verifyAttestation(normalized, net);
       setResult(res);
+      // If the indexer says not found, also probe the contract directly so
+      // the user can see whether the attestation truly doesn't exist or
+      // whether the indexer just hasn't picked it up yet.
+      if (!res.valid) {
+        const diag = await diagnoseAttestation(normalized, net);
+        setDiagnostic(diag);
+      }
     } catch (e: any) {
       setError("Verify failed: " + (e?.message ?? e));
     } finally {
@@ -203,6 +212,43 @@ function VerifyPageInner() {
                 >
                   Verify on Base {(result as any).attestationOnNetwork === "8453" ? "mainnet" : "Sepolia"} instead ↗
                 </button>
+              </div>
+            )}
+
+            {/* On-chain diagnostic — shown when the indexer says "not found"
+                but the user wants to know if the contract storage has the
+                attestation (or, for a phantom, shows the partial struct). */}
+            {!result.valid && diagnostic && (
+              <div style={{ marginTop: 14, padding: 12, background: "var(--paper)", border: "1px dashed var(--line)", borderRadius: 2, fontSize: 12 }}>
+                <p className="kicker" style={{ marginBottom: 8 }}>On-chain diagnostic</p>
+                {diagnostic.onChain ? (
+                  <div>
+                    <p style={{ color: "var(--moss)", marginBottom: 6 }}>
+                      ✓ The EAS contract <em>does</em> hold this attestation. The indexer just hasn't picked it up yet — try again in a few seconds.
+                    </p>
+                    <div className="mono" style={{ fontSize: 11, color: "var(--ink-soft)", lineHeight: 1.6 }}>
+                      <div>attester: <span style={{ color: "var(--ink)" }}>{diagnostic.attester}</span></div>
+                      <div>recipient: <span style={{ color: "var(--ink)" }}>{diagnostic.recipient}</span></div>
+                      <div>time: <span style={{ color: "var(--ink)" }}>{diagnostic.time > 0 ? new Date(diagnostic.time * 1000).toISOString() : "0 (epoch)"}</span></div>
+                      <div>schema: <span style={{ color: "var(--ink)" }}>{diagnostic.schema?.slice(0, 18)}…</span></div>
+                    </div>
+                  </div>
+                ) : diagnostic.time === 0 && diagnostic.attester === "0x0000000000000000000000000000000000000000" ? (
+                  <div>
+                    <p style={{ color: "var(--seal)", marginBottom: 6 }}>
+                      ⚠ The contract returned a default struct (attester: 0x0, time: 0). This is the canonical "phantom UID" — the EAS call likely reverted mid-flight and the SDK/wallet showed a fake success.
+                    </p>
+                    <p style={{ color: "var(--ink-soft)" }}>
+                      → Re-mint the passport. The lib now catches this and throws a clear error.
+                    </p>
+                  </div>
+                ) : (
+                  <div>
+                    <p style={{ color: "var(--ink-soft)" }}>
+                      The contract returned empty data for this UID. The attestation truly does not exist on-chain.
+                    </p>
+                  </div>
+                )}
               </div>
             )}
             {result.attestation && (
