@@ -12,6 +12,44 @@ import {
   NetworkKey,
 } from "./eas";
 
+// EAS SDK's Transaction<T>.wait() returns whatever the per-method waitCallback
+// produces (for attest() it's the UID extracted from the Attested event). If
+// the tx reverted inside the contract, no Attested event is emitted and the
+// SDK throws "Unable to process Attested events" — but the wallet/UI may
+// have already shown a "success" because the tx *was* mined. We unwrap
+// this so callers get a clean error AND a real UID-or-failure signal.
+
+/** Wait for an EAS SDK Transaction to mine, assert success, and return the
+ *  uid extracted from the Attested event.
+ *  Throws a clear error if the tx reverted or no Attested event was emitted. */
+async function waitForAttest(t: { wait(): Promise<any> }) {
+  const uid: string = await t.wait();
+  // The SDK may return undefined if the Attested event was never emitted
+  // (i.e. the contract call reverted). In that case uid === undefined.
+  if (!uid || typeof uid !== "string" || !uid.startsWith("0x") || uid.length !== 66) {
+    throw new Error(
+      "Attestation transaction mined but no Attested event was emitted. " +
+      "This usually means the EAS contract reverted (e.g. wrong schema UID, " +
+      "insufficient gas, or the wallet rejected a follow-up signature). " +
+      "Check the tx hash on the block explorer for the revert reason."
+    );
+  }
+  return uid;
+}
+
+/** SchemaRegistry.register returns the schema UID directly. If for any
+ *  reason it's not a clean string, surface a clear error. */
+async function waitForSchemaRegister(t: { wait(): Promise<any> }) {
+  const result = await t.wait();
+  if (typeof result !== "string" || !result.startsWith("0x") || result.length !== 66) {
+    throw new Error(
+      "SchemaRegistry.register returned an unexpected value: " +
+      JSON.stringify(result).slice(0, 200)
+    );
+  }
+  return result;
+}
+
 export type PassportInput = {
   agentName: string;
   owner: string; // 0x address
@@ -54,22 +92,32 @@ export async function createPassport(
   let passportSchemaUid = SCHEMA_UIDS[network].passport;
   try {
     const existing = await registry.getSchema({ uid: passportSchemaUid });
-    if (!existing) {
+    if (!existing || (existing as any).uid === ethers.ZeroHash) {
       const regTx = await registry.register({
         schema: PASSPORT_SCHEMA,
         resolverAddress: ethers.ZeroAddress,
         revocable: true,
       });
-      passportSchemaUid = await regTx.wait();
+      passportSchemaUid = await waitForSchemaRegister(regTx);
     }
-  } catch {
-    // getSchema throws if absent — register it.
-    const regTx = await registry.register({
-      schema: PASSPORT_SCHEMA,
-      resolverAddress: ethers.ZeroAddress,
-      revocable: true,
-    });
-    passportSchemaUid = await regTx.wait();
+  } catch (e: any) {
+    // getSchema throws if absent — register it. If registration also fails,
+    // surface the actual error (network mismatch, gas, etc.) instead of
+    // a misleading "Unable to process" message.
+    try {
+      const regTx = await registry.register({
+        schema: PASSPORT_SCHEMA,
+        resolverAddress: ethers.ZeroAddress,
+        revocable: true,
+      });
+      passportSchemaUid = await waitForSchemaRegister(regTx);
+    } catch (regErr: any) {
+      throw new Error(
+        `Schema registration failed on ${network}: ${regErr?.shortMessage ?? regErr?.message ?? regErr}. ` +
+        `This usually means the schema is already registered by a different wallet, ` +
+        `or the SchemaRegistry contract is unreachable on this network.`
+      );
+    }
   }
 
   const did = deriveDid(recipient);
@@ -91,8 +139,22 @@ export async function createPassport(
       data,
     },
   });
-  const uid = await tx.wait();
-  return { uid, did, txHash: (tx.data as any).hash ?? "" };
+  let uid: string;
+  let txHash = "";
+  try {
+    uid = await waitForAttest(tx);
+    txHash = (tx as any).receipt?.hash ?? (tx as any).data?.hash ?? "";
+  } catch (e: any) {
+    // Surface the most useful error we have. The EAS contract often reverts
+    // with a custom error like "AttestationNotFound" or "InvalidSchema" when
+    // the schema UID doesn't match a real on-chain schema.
+    txHash = (tx as any).receipt?.hash ?? (tx as any).data?.hash ?? "";
+    throw new Error(
+      `Mint failed: ${e?.shortMessage ?? e?.message ?? e}. ` +
+      `Tx hash: ${txHash || "(unknown)"} — check the explorer for the revert reason.`
+    );
+  }
+  return { uid, did, txHash };
 }
 
 export type ActionInput = {
@@ -139,13 +201,13 @@ export async function attestAction(
   let actionSchemaUid = SCHEMA_UIDS[network].action;
   try {
     const existing = await registry.getSchema({ uid: actionSchemaUid });
-    if (!existing) {
+    if (!existing || (existing as any).uid === ethers.ZeroHash) {
       const regTx = await registry.register({
         schema: ACTION_SCHEMA,
         resolverAddress: ethers.ZeroAddress,
         revocable: true,
       });
-      actionSchemaUid = await regTx.wait();
+      actionSchemaUid = await waitForSchemaRegister(regTx);
     }
   } catch {
     const regTx = await registry.register({
@@ -153,7 +215,7 @@ export async function attestAction(
       resolverAddress: ethers.ZeroAddress,
       revocable: true,
     });
-    actionSchemaUid = await regTx.wait();
+    actionSchemaUid = await waitForSchemaRegister(regTx);
   }
 
   const payloadHash = ethers
@@ -178,7 +240,7 @@ export async function attestAction(
       data,
     },
   });
-  const uid = await tx.wait();
+  const uid = await waitForAttest(tx);
   return { uid, payloadHash: "0x" + payloadHash };
 }
 
