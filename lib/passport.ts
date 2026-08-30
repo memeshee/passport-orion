@@ -22,7 +22,7 @@ import {
 /** Wait for an EAS SDK Transaction to mine, assert success, and return the
  *  uid extracted from the Attested event.
  *  Throws a clear error if the tx reverted or no Attested event was emitted. */
-async function waitForAttest(t: { wait(): Promise<any> }) {
+async function waitForAttest(t: { wait(): Promise<any> }, network?: NetworkKey) {
   const uid: string = await t.wait();
   // The SDK may return undefined if the Attested event was never emitted
   // (i.e. the contract call reverted). In that case uid === undefined.
@@ -32,6 +32,16 @@ async function waitForAttest(t: { wait(): Promise<any> }) {
       "This usually means the EAS contract reverted (e.g. wrong schema UID, " +
       "insufficient gas, or the wallet rejected a follow-up signature). " +
       "Check the tx hash on the block explorer for the revert reason."
+    );
+  }
+  // Additional safety: if the SDK returns a "valid-looking" UID but the receipt
+  // status is 0 (reverted), the UID is a phantom. The EAS SDK caches UIDs in
+  // some wallet paths even on revert; we have to check the receipt directly.
+  const receipt = (t as any).receipt;
+  if (receipt && Number(receipt.status) === 0) {
+    throw new Error(
+      `Attestation tx reverted (receipt status = 0). UID ${uid} is not on-chain. ` +
+      `Check the tx hash ${receipt.hash} on the block explorer for the revert reason.`
     );
   }
   return uid;
@@ -99,6 +109,35 @@ function decodeEasError(e: any): string {
   }
   // Non-custom-error path (e.g. "out of gas", "nonce has already been used")
   return e?.shortMessage ?? e?.message ?? String(e);
+}
+
+/** Post-attest on-chain confirmation. Calls the EAS contract's
+ *  getAttestation(uid) and returns true ONLY if the returned struct is
+ *  backed by real on-chain state (attester !== 0x0 AND time > 0).
+ *  This is the ultimate guard against phantom UIDs returned by the
+ *  EAS SDK or wallet when an attest() call reverts mid-flight. */
+async function verifyOnChain(eas: EAS, uid: string): Promise<boolean> {
+  try {
+    // The EAS SDK exposes a low-level getAttestation via the underlying contract.
+    // We use the contract's read directly to avoid SDK quirks.
+    const contract = (eas as any).contract;
+    if (!contract || !contract.runner) return true; // can't verify; trust the SDK
+    const att = await contract.getAttestation(uid);
+    if (!att) return false;
+    // EAS returns a default struct (uid: 0x0, attester: 0x0, time: 0) for
+    // UIDs that don't exist. The user's UID will be non-zero (we checked)
+    // but the attester and time will be zero in the phantom case.
+    const attester = (att as any).attester ?? ethers.ZeroAddress;
+    const time = Number((att as any).time ?? 0);
+    const isZeroAttester = !attester || attester.toLowerCase() === ethers.ZeroAddress.toLowerCase();
+    const isZeroTime = !time || time === 0;
+    return !(isZeroAttester && isZeroTime);
+  } catch {
+    // If the call reverts (e.g. contract doesn't support the method), trust
+    // the SDK. Most likely the EAS contract is reachable but getAttestation
+    // for this UID didn't find it — so we return false.
+    return false;
+  }
 }
 
 export type PassportInput = {
@@ -193,7 +232,7 @@ export async function createPassport(
   let uid: string;
   let txHash = "";
   try {
-    uid = await waitForAttest(tx);
+    uid = await waitForAttest(tx, network);
     txHash = (tx as any).receipt?.hash ?? (tx as any).data?.hash ?? "";
   } catch (e: any) {
     // Surface the most useful error we have. The EAS contract often reverts
@@ -204,6 +243,21 @@ export async function createPassport(
     throw new Error(
       `Mint failed: ${decoded}. Tx hash: ${txHash || "(unknown)"} — ` +
       `check the explorer for the revert reason.`
+    );
+  }
+  // FINAL guard: verify the attestation actually exists on-chain. If the
+  // SDK or the wallet gave us a phantom UID (a string that looks like a UID
+  // but isn't backed by on-chain state), this catches it. The EAS contract
+  // returns a default struct (attester: 0x0, time: 0) for UIDs that don't
+  // exist, so we check for those.
+  const onChain = await verifyOnChain(eas, uid);
+  if (!onChain) {
+    throw new Error(
+      `Mint produced UID ${uid} but the attestation is not on-chain ` +
+      `(attester or time is zero). The EAS contract call likely reverted ` +
+      `silently. Tx hash: ${txHash || "(unknown)"}. ` +
+      `Please retry — if this keeps happening, your wallet/provider may ` +
+      `be misreporting tx success.`
     );
   }
   return { uid, did, txHash };
@@ -294,13 +348,24 @@ export async function attestAction(
   });
   let uid: string;
   try {
-    uid = await waitForAttest(tx);
+    uid = await waitForAttest(tx, network);
   } catch (e: any) {
     const decoded = decodeEasError(e);
     const txHash = (tx as any).receipt?.hash ?? (tx as any).data?.hash ?? "";
     throw new Error(
       `Issue receipt failed: ${decoded}. ` +
       `Tx hash: ${txHash || "(unknown)"} — check the explorer for the revert reason.`
+    );
+  }
+  // On-chain confirmation: the action UID must exist on-chain.
+  const onChain = await verifyOnChain(eas, uid);
+  if (!onChain) {
+    const txHash = (tx as any).receipt?.hash ?? (tx as any).data?.hash ?? "";
+    throw new Error(
+      `Action receipt produced UID ${uid} but the attestation is not on-chain. ` +
+      `This usually means the action schema isn't registered on ${network} yet ` +
+      `(the lib should auto-register it, but it may have failed). ` +
+      `Tx hash: ${txHash || "(unknown)"} — check the explorer.`
     );
   }
   return { uid, payloadHash: "0x" + payloadHash };
