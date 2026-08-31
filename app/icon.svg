@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!-- Outer diamond: Base blue -->
+  <path d="M16 2 L30 16 L16 30 L2 16 Z" fill="#0052FF"/>
+  <!-- Inner diamond: white -->
+  <path d="M16 8 L24 16 L16 24 L8 16 Z" fill="#ffffff"/>
+  <!-- Checkmark: Base blue -->
+  <path d="M11 16.5 L14.5 20 L21 13" fill="none" stroke="#0052FF" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
